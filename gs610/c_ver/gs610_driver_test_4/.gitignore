@@ -1,0 +1,5 @@
+/build/
+/gs610_sweep.exe
+/tmp/
+__pycache__/
+*.pyc

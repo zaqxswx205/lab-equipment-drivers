@@ -1,0 +1,22 @@
+# 仓库里统一存 LF，检出时按类型转换
+* text=auto
+
+*.py    text eol=lf
+*.c     text eol=lf
+*.h     text eol=lf
+*.cpp   text eol=lf
+*.md    text eol=lf
+*.ini   text eol=lf
+*.txt   text eol=lf
+*.json  text eol=lf
+*.csv   text eol=lf
+
+# Windows 批处理必须是 CRLF，否则 cmd 解析会出错
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+*.exe   binary
+*.pdf   binary
+*.rar   binary
+*.png   binary
+*.jpg   binary
