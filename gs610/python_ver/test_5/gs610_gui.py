@@ -23,6 +23,11 @@ class DemoInstrument:
     def __init__(self):
         self.output = False
         self.current = '0'
+        self.linear = {}
+        self.linear_index = 0
+        self.stored = []
+        self.read_index = 0
+        self.period = 1.3
         self.remote_sense = False
         self.limit = '12'
 
@@ -31,12 +36,50 @@ class DemoInstrument:
             self.output = command == ':OUTP ON'
         elif command.startswith(':SENS:RSEN '):
             self.remote_sense = command.split()[-1] in ('ON', '1')
+        elif command.startswith(':SOUR:CURR:SWE:'):
+            key, value = command.split()
+            self.linear[key.rsplit(':', 1)[1]] = value
+        elif command.startswith(':TRIG:TIM '):
+            self.period = float(command.split()[-1])
+        elif command.startswith(':TRAC:DATA:NUMB '):
+            self.read_index = int(command.split()[-1]) - 1
+        elif command == ':SWE:TRIG':
+            from decimal import Decimal
+            start = Decimal(self.linear['STAR'])
+            stop = Decimal(self.linear['STOP'])
+            step = Decimal(self.linear['STEP'])
+            count = int(abs(stop - start) / step) + 1
+            self.stored = [start + (step if stop >= start else -step) * i for i in range(count)]
+            self.current = str(stop)
         elif command.startswith(':SOUR:CURR:LEV '):
             self.current = command.split()[-1]
         elif command.startswith(':SOUR:VOLT:PROT:ULIM '):
             self.limit = command.split()[-1]
 
     def query(self, command):
+        if command == ':TRIG:SOUR?':
+            return 'TIM'
+        if command == ':TRIG:TIM?':
+            return str(self.period)
+        if command == ':STAT:SOUR:EVEN?':
+            return '0'
+        if command == ':TRAC:ACT?':
+            return str(len(self.stored))
+        if command == ':TRAC:DATA:SOUR?':
+            return str(self.stored[self.read_index])
+        if command == ':TRAC:DATA:TIME?':
+            return str(self.read_index * self.period)
+        if command == ':TRAC:DATA:SENS?':
+            value = float(self.stored[self.read_index]) * 2
+            return str(max(-float(self.limit), min(float(self.limit), value)))
+        if command == ':STAT:SOUR:COND?':
+            return '32'
+        if command == ':SOUR:MODE?':
+            return 'SWE'
+        if command == ':SOUR:CURR:SWE:SPAC?':
+            return 'LIN'
+        if command.startswith(':SOUR:CURR:SWE:') and command.endswith('?'):
+            return self.linear[command.rsplit(':', 1)[1][:-1]]
         if command == ':SYST:ERR?':
             return '0,"No error"'
         if command == ':OUTP?':
@@ -45,7 +88,7 @@ class DemoInstrument:
             return self.current
         if command == ':SENS:RSEN?':
             return str(int(self.remote_sense))
-        if command == ':READ?':
+        if command == ':FETC?':
             value = float(self.current) * 2
             return str(max(-float(self.limit), min(float(self.limit), value)))
         return {':SOUR:VOLT:PROT:ULIM?': self.limit,
@@ -97,7 +140,7 @@ class SweepApp:
         outer = ttk.Frame(self.root, padding=14)
         outer.pack(fill='both', expand=True)
         ttk.Label(outer, text='GS610 电压采集', font=('Microsoft YaHei UI', 19, 'bold')).pack(anchor='w')
-        ttk.Label(outer, text='4W 四线制：OUTPUT 输出电流 · SENSE 测量电压 · 每点保存 CSV').pack(anchor='w', pady=(0, 10))
+        ttk.Label(outer, text='INT 自动 Linear · OUTPUT 输出电流 · SENSE 测量电压 · 步进周期 = 采样前等待 + 0.3 s').pack(anchor='w', pady=(0, 10))
         connection = ttk.LabelFrame(outer, text='串口连接', padding=5)
         connection.pack(fill='x', pady=(0, 8))
         self.port_box = self.field(connection, 0, 0, 'port', '串口号', '')
@@ -316,7 +359,8 @@ class SweepApp:
                                      write_timeout=config['timeout'], xonxoff=config['flow'] == 'xon',
                                      rtscts=config['flow'] == 'rtscts', dsrdtr=False)
                 port.reset_input_buffer()
-                device = GS610(SerialInstrument(port, config['terminator']))
+                device = GS610(SerialInstrument(port, config['terminator']),
+                               on_warning=lambda warning: self.events.put(('warning', warning)))
                 identity = device.query('*IDN?')
                 fields = [field.strip().upper() for field in identity.split(',')]
                 if len(fields) < 2 or fields[1] not in ('765501', 'GS610'):
@@ -360,6 +404,8 @@ class SweepApp:
             elif event == 'identity':
                 self.identity.set('设备：' + data)
                 self.status.set('正在采集')
+            elif event == 'warning':
+                self.status.set(data)
             elif event == 'finished':
                 kind, detail, path = data
                 self.worker = None

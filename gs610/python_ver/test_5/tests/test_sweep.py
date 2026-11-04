@@ -16,6 +16,11 @@ class Instrument:
         self.commands = []
         self.output = False
         self.current = '0'
+        self.linear = {}
+        self.linear_index = 0
+        self.stored = []
+        self.read_index = 0
+        self.period = 1.3
         self.remote_sense = False
         self.fail_read = fail_read
 
@@ -25,11 +30,50 @@ class Instrument:
             self.output = command == ':OUTP ON'
         elif command.startswith(':SENS:RSEN '):
             self.remote_sense = command.split()[-1] in ('ON', '1')
+        elif command.startswith(':SOUR:CURR:SWE:'):
+            key, value = command.split()
+            self.linear[key.rsplit(':', 1)[1]] = value
+        elif command.startswith(':TRIG:TIM '):
+            self.period = float(command.split()[-1])
+        elif command.startswith(':TRAC:DATA:NUMB '):
+            self.read_index = int(command.split()[-1]) - 1
+        elif command == ':SWE:TRIG':
+            from decimal import Decimal
+            start = Decimal(self.linear['STAR'])
+            stop = Decimal(self.linear['STOP'])
+            step = Decimal(self.linear['STEP'])
+            count = int(abs(stop - start) / step) + 1
+            self.stored = [start + (step if stop >= start else -step) * i for i in range(count)]
+            self.current = str(stop)
         elif command.startswith(':SOUR:CURR:LEV '):
             self.current = command.split()[-1]
 
     def query(self, command):
         self.commands.append(command)
+        if command == ':TRIG:SOUR?':
+            return 'TIM'
+        if command == ':TRIG:TIM?':
+            return str(self.period)
+        if command == ':STAT:SOUR:EVEN?':
+            return '0'
+        if command == ':TRAC:ACT?':
+            return str(len(self.stored))
+        if command == ':TRAC:DATA:SOUR?':
+            return str(self.stored[self.read_index])
+        if command == ':TRAC:DATA:TIME?':
+            return str(self.read_index * self.period)
+        if command == ':TRAC:DATA:SENS?':
+            if self.fail_read:
+                raise TimeoutError('simulated timeout')
+            return '0.125'
+        if command == ':STAT:SOUR:COND?':
+            return '32'
+        if command == ':SOUR:MODE?':
+            return 'SWE'
+        if command == ':SOUR:CURR:SWE:SPAC?':
+            return 'LIN'
+        if command.startswith(':SOUR:CURR:SWE:') and command.endswith('?'):
+            return self.linear[command.rsplit(':', 1)[1][:-1]]
         if command == ':SYST:ERR?':
             return '0,"No error"'
         if command == ':OUTP?':
@@ -38,7 +82,7 @@ class Instrument:
             return self.current
         if command == ':SENS:RSEN?':
             return str(int(self.remote_sense))
-        if command == ':READ?':
+        if command == ':FETC?':
             if self.fail_read:
                 raise TimeoutError('simulated timeout')
             return '0.125'

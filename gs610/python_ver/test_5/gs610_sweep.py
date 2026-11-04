@@ -60,6 +60,8 @@ def current_points(start, stop, step):
 def plan_sweep(start, stop, step, voltage_limit, round_trip=True):
     """Include both endpoints on each leg, measuring the turning point twice."""
     points = current_points(start, stop, step)
+    if abs(number(stop) - number(start)) % number(step):
+        raise ValueError('Linear 扫描要求起止电流之差为步进的整数倍')
     if round_trip:
         return_points = current_points(stop, start, step)
         if len(points) + len(return_points) > 100000:
@@ -152,7 +154,9 @@ class SerialInstrument:
             self.write(command)
             response = self.port.read_until(self.terminator, size=4096)
             if not response.endswith(self.terminator):
-                raise TimeoutError('串口响应超时或不完整，请检查接线、波特率及 Term 设置')
+                raise TimeoutError(f'串口响应超时或不完整：查询 {command}，'
+                                   f'收到 {len(response)} 字节 {response[:120]!r}；'
+                                   '请记录设备 ERR 的具体错误码，并检查通信参数及结束符')
             text = response[:-len(self.terminator)].decode('ascii').strip()
             if not text:
                 raise RuntimeError('设备返回空响应，请检查串口设置')
@@ -164,23 +168,44 @@ class SerialInstrument:
 
 
 class GS610:
-    def __init__(self, instrument):
+    def __init__(self, instrument, on_warning=None):
         self.instrument = instrument
+        self.on_warning = on_warning
+        self.last_operation = '初始化'
+        self.battery_warned = False
 
     def write(self, command):
+        self.last_operation = command
         self.instrument.write(command)
 
     def query(self, command):
-        return self.instrument.query(command).strip()
+        if command != ':SYST:ERR?':
+            self.last_operation = command
+        try:
+            return self.instrument.query(command).strip()
+        except TimeoutError as exc:
+            raise TimeoutError(f'{exc}\n查询命令: {command}；检查阶段/最近命令: {self.last_operation}') from exc
 
     def check_error(self):
-        response = self.query(':SYST:ERR?')
-        try:
-            code = int(response.split(',', 1)[0])
-        except ValueError as exc:
-            raise RuntimeError(f'设备错误响应无法解析: {response}') from exc
-        if code:
-            raise RuntimeError(f'GS610 错误: {response}')
+        for _ in range(32):
+            response = self.query(':SYST:ERR?')
+            try:
+                code = int(response.split(',', 1)[0])
+            except ValueError as exc:
+                raise RuntimeError(f'设备错误响应无法解析: {response}') from exc
+            if code == 0:
+                return
+            if code == 301:
+                if not self.battery_warned:
+                    self.battery_warned = True
+                    warning = 'GS610 +301：内部备用电池电量低，仪器文件时间戳可能不正确，请联系维修更换电池。电脑 CSV 时间不受此告警影响。'
+                    print(warning, file=sys.stderr)
+                    if self.on_warning:
+                        self.on_warning(warning)
+                # Drain the queue so a following real error is never hidden.
+                continue
+            raise RuntimeError(f'GS610 错误: {response}\n检查阶段/最近命令: {self.last_operation}')
+        raise RuntimeError('设备错误队列持续返回告警，停止扫描')
 
     def configure(self, source_range, voltage_limit):
         self.write(':SYST:REM')
@@ -188,7 +213,7 @@ class GS610:
         self.check_error()
         for command in (
             ':SOUR:FUNC CURR', ':SOUR:SHAP DC', ':SOUR:MODE FIX',
-            ':TRIG:SOUR IMM', ':SOUR:DEL MIN',
+            ':TRIG:SOUR TIM', ':SOUR:DEL MIN',
             f':SOUR:CURR:RANG {source_range}',
             ':SOUR:VOLT:PROT:STAT ON', ':SOUR:VOLT:PROT:LINK ON',
             f':SOUR:VOLT:PROT:ULIM {voltage_limit}',
@@ -218,8 +243,69 @@ class GS610:
         if actual != current:
             raise RuntimeError(f'电流设定被设备调整: 请求 {current} A，读回 {actual} A')
 
+    def configure_linear(self, points, dwell, stop_event=None):
+        if len(points) > 65535:
+            raise ValueError('仪器每程缓存最多支持 65535 点')
+        step = abs(points[1] - points[0]) if len(points) > 1 else RANGES[0][2]
+        for command in (':SOUR:MODE SWE', ':SOUR:CURR:SWE:SPAC LIN',
+                        f':SOUR:CURR:SWE:STAR {points[0]}',
+                        f':SOUR:CURR:SWE:STOP {points[-1]}',
+                        f':SOUR:CURR:SWE:STEP {step}', ':SWE:COUN 1',
+                        ':SWE:LAST KEEP', f':TRIG:TIM {dwell + 0.3:.6f}',
+                        ':TRAC:STAT OFF', ':TRAC:AUTO ON', ':TRAC:MONL ON',
+                        f':SENS:DEL {dwell}' if dwell else ':SENS:DEL MIN'):
+            self.write(command)
+            self.check_error()
+        if self.query(':SOUR:MODE?').upper() != 'SWE' or self.query(':SOUR:CURR:SWE:SPAC?').upper() != 'LIN':
+            raise RuntimeError('设备未切换为 Linear 扫描')
+        if self.query(':TRIG:SOUR?').upper() != 'TIM':
+            raise RuntimeError('设备未切换为 INT 内部定时触发')
+        if abs(float(number(self.query(':TRIG:TIM?'))) - (dwell + 0.3)) > 0.000001:
+            raise RuntimeError('设备内部触发周期与请求不符')
+        for suffix, expected in (('STAR', points[0]), ('STOP', points[-1]), ('STEP', step)):
+            if number(self.query(f':SOUR:CURR:SWE:{suffix}?')) != expected:
+                raise RuntimeError(f'设备 Linear {suffix} 参数与请求不符')
+        self.wait_sweep_ready(stop_event)
+
+    def wait_sweep_ready(self, stop_event=None):
+        # IM765501-01E 16-46: RDY clears on LIN/LOG parameter changes.
+        deadline = time.monotonic() + 5
+        while True:
+            if stop_event is not None and stop_event.is_set():
+                raise SweepCancelled('扫描已停止')
+            if int(self.query(':STAT:SOUR:COND?')) & (1 << 5):
+                return
+            self.check_error()
+            if time.monotonic() >= deadline:
+                raise TimeoutError('设备 Linear 扫描准备超时：RDY 未就绪，请查看设备错误日志')
+            time.sleep(0.02)
+
+    @staticmethod
+    def check_cancel(stop_event):
+        if stop_event is not None and stop_event.is_set():
+            raise SweepCancelled('扫描已停止')
+
+    def wait_stored_point(self, index, timeout, stop_event):
+        deadline = time.monotonic() + timeout
+        while True:
+            self.check_cancel(stop_event)
+            self.check_error()
+            events = int(self.query(':STAT:SOUR:EVEN?'))
+            if events & (1 << 7):
+                raise RuntimeError('仪器内部触发周期短于源测量周期（Sampling error），停止扫描')
+            available = int(self.query(':TRAC:ACT?'))
+            if available >= index:
+                return
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f'等待仪器缓存第 {index} 点超时，当前已存储 {available} 点')
+            if stop_event is not None:
+                if stop_event.wait(0.05):
+                    raise SweepCancelled('扫描已停止')
+            else:
+                time.sleep(0.05)
+
     def measure_voltage(self):
-        response = self.query(':READ?')
+        response = self.query(':FETC?')
         self.check_error()
         status = int(self.query(':STAT:SENS:COND?'))
         if status & (1 << 5):
@@ -231,8 +317,8 @@ class GS610:
 
     def sweep(self, points, source_range, voltage_limit, dwell=1.0, keep_output=False,
               csv_path=None, on_record=None, stop_event=None):
-        if not math.isfinite(dwell) or dwell < 0:
-            raise ValueError('每步停留时间必须为有限的非负数')
+        if not math.isfinite(dwell) or not 0 <= dwell <= 3599.7:
+            raise ValueError('每步测量延时必须在 0 到 3599.7 秒之间（为内部触发周期预留 0.3 秒）')
         # The repeated turning point is the first independent return reading.
         # Also handle a round trip whose start and stop are the same current.
         return_start = next((i for i in range(1, len(points))
@@ -249,32 +335,53 @@ class GS610:
             if stop_event is not None and stop_event.is_set():
                 raise SweepCancelled('扫描已停止')
             self.configure(source_range, voltage_limit)
+            return_start = next((i for i in range(1, len(points))
+                                 if points[i] == points[i - 1]
+                                 or (points[i] - points[i - 1]) * (points[1] - points[0]) < 0), len(points))
+            self.set_current(points[0])
+            self.configure_linear(points[:return_start], dwell, stop_event)
             started = time.monotonic()
-            for index, current in enumerate(points):
-                if stop_event is not None and stop_event.is_set():
-                    raise SweepCancelled('扫描已停止')
-                self.set_current(current)
-                if index == 0:
-                    self.write(':OUTP ON')
+            legs = [points[:return_start]]
+            if return_start < len(points):
+                legs.append(points[return_start:])
+            for leg_index, leg in enumerate(legs):
+                if leg_index:
+                    self.configure_linear(leg, dwell, stop_event)
+                self.check_cancel(stop_event)
+                self.write(':OUTP ON')
+                self.check_error()
+                if self.query(':OUTP?') != '1':
+                    raise RuntimeError('设备输出未能开启')
+                self.query(':STAT:SOUR:EVEN?')  # clear old sweep/sampling events
+                leg_started = time.monotonic()
+                self.write(':SWE:TRIG')
+                self.check_error()
+                for local_index, expected in enumerate(leg, 1):
+                    self.wait_stored_point(local_index, dwell + 5, stop_event)
+                    self.write(f':TRAC:DATA:NUMB {local_index}')
+                    actual = number(self.query(':TRAC:DATA:SOUR?'))
+                    measured = number(self.query(':TRAC:DATA:SENS?'))
+                    stored_time = float(number(self.query(':TRAC:DATA:TIME?')))
                     self.check_error()
-                    if self.query(':OUTP?') != '1':
-                        raise RuntimeError('设备输出未能开启，请检查联锁及输出控制设置')
-                if stop_event is None:
-                    time.sleep(dwell)
-                elif stop_event.wait(dwell):
-                    raise SweepCancelled('扫描已停止')
-                measured = self.measure_voltage()
-                elapsed = time.monotonic() - started
-                record = (index + 1, elapsed, current, measured)
-                records.append(record)
-                if output:
-                    output.save(records)
-                if on_record is not None:
-                    on_record(record)
-                print(f'[{index + 1}/{len(points)}] 设定: {current} A | '
-                      f'电压: {measured} V', flush=True)
-            if stop_event is not None and stop_event.is_set():
-                raise SweepCancelled('扫描已停止')
+                    if int(self.query(':STAT:SENS:COND?')) & (1 << 5):
+                        raise RuntimeError('反馈电压测量超量程')
+                    if actual != expected:
+                        raise RuntimeError(f'缓存第 {local_index} 点电流不符：预期 {expected} A，实际 {actual} A')
+                    elapsed = leg_started - started + stored_time
+                    record = (len(records) + 1, elapsed, actual, measured)
+                    records.append(record)
+                    if output:
+                        output.save(records)
+                    if on_record is not None:
+                        on_record(record)
+                    print(f'[{len(records)}/{len(points)}] 设定: {actual} A | 电压: {measured} V', flush=True)
+                # Stop internal cycles before changing parameters for the return leg.
+                if leg_index < len(legs) - 1 or not keep_output:
+                    self.write(':OUTP OFF')
+                    self.check_error()
+                self.write(':TRAC:STAT OFF')
+                self.check_error()
+            self.check_cancel(stop_event)
             completed = True
             return records
         finally:
