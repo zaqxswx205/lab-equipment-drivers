@@ -1,13 +1,21 @@
 """GS610 desktop interface. Run with: python gs610_gui.py"""
 import math
-from pathlib import Path
 import queue
 import threading
 import tkinter as tk
+from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from gs610_sweep import (GS610, SerialInstrument, SweepCancelled, default_result_path,
-                         plan_sweep, prompt_seconds, result_path, validate_port)
+from gs610_sweep import (
+    GS610,
+    SerialInstrument,
+    SweepCancelled,
+    default_result_path,
+    plan_sweep,
+    prompt_seconds,
+    result_path,
+    validate_port,
+)
 
 
 class DemoInstrument:

@@ -2,16 +2,15 @@
 
 import argparse
 import csv
-from datetime import datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
 import math
 import os
 import re
-from pathlib import Path
 import sys
 import time
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from tempfile import NamedTemporaryFile
-
 
 # Nominal range, actual source capacity, resolution, maximum load voltage (18-1).
 RANGES = tuple(
