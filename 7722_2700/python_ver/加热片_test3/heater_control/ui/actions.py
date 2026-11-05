@@ -11,6 +11,9 @@ from ui.constants import BASE
 
 class ActionsMixin:
     def idle(self):
+        if self.scanning:
+            messagebox.showwarning('扫描中', '请等待设备识别完成。')
+            return False
         if self.worker and self.worker.is_alive():
             messagebox.showwarning('运行中', '请先停止，再修改或保存配置。')
             return False
@@ -57,6 +60,8 @@ class ActionsMixin:
         self.stop_drive() if self.drive_busy else self.start_part('drive')
 
     def start_part(self, part):
+        if self.scanning:
+            return
         if part == 'heater' and self.heater_link.get() and not (self.controls.drive.is_set() and self.controls.drive_ready.is_set()):
             self.heater_readout.set('加热联动保护：请先开启7722交流驱动输出。')
             return
@@ -182,6 +187,7 @@ class ActionsMixin:
 
     def refresh_run_buttons(self):
         live = bool(self.worker and self.worker.is_alive())
+        self.scan_button.configure(state='disabled' if self.scanning or live or not self.run_finished or self.closing or self.off_failed else 'normal')
         settling = not (self.acquisition_busy or self.drive_busy or self.heater_busy) and (not self.run_finished or live)
         for part, busy, button in (('acquisition', self.acquisition_busy, self.acquisition_button),
                                    ('drive', self.drive_busy, self.drive_button),
@@ -189,7 +195,7 @@ class ActionsMixin:
             requested = getattr(self.controls, part).is_set()
             label = {'acquisition': '采集', 'drive': '驱动', 'heater': '加热'}[part]
             text = ('停止'+label if requested else '正在停止'+label+'…') if busy else '开始'+label
-            blocked = self.closing or settling or (busy and not requested) or (part in ('drive', 'heater') and self.off_failed)
+            blocked = self.scanning or self.closing or settling or (busy and not requested) or (part in ('drive', 'heater') and self.off_failed)
             if part == 'acquisition' and busy and (self.heater_busy or self.controls.heater.is_set() or self.controls.heater_pending.is_set()):
                 blocked = True
             if part == 'heater' and not busy and self.heater_link.get() and not self.controls.heater_allowed():

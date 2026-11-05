@@ -13,7 +13,9 @@ class EventsMixin:
         try:
             while True:
                 kind, value = self.events.get_nowait()
-                if kind == 'measurement_fault':
+                if kind.startswith('scan_'):
+                    self.handle_scan_event(kind, value)
+                elif kind == 'measurement_fault':
                     self.acquisition_status.set('采集失效：'+value)
                     if self.drive_busy:
                         self.drive_status.set('测温故障保护：正在关断电源…')

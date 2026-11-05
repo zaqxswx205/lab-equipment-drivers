@@ -103,7 +103,8 @@ class LayoutMixin:
         self.acquisition_status_label.grid(row=counts['2700 采集与保护'], column=0, columnspan=2, sticky='nw', pady=(8, 0))
         scan_row = ttk.Frame(panels)
         scan_row.grid(row=1, column=0, columnspan=3, sticky='ew', pady=(8, 0))
-        ttk.Button(scan_row, text='刷新串口', command=self.refresh_ports).pack(side='left')
+        self.scan_button = ttk.Button(scan_row, text='刷新串口并识别', command=self.scan_devices)
+        self.scan_button.pack(side='left')
         ttk.Button(scan_row, text='高级设置…', command=self.connection_settings).pack(side='left', padx=(8, 0))
         ttk.Label(scan_row, textvariable=self.scan_status, wraplength=320,
                   justify='left').pack(side='left', padx=(16, 0))

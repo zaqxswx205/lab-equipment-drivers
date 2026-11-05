@@ -9,6 +9,7 @@ from tkinter import messagebox
 
 from core import Config, load_config
 from runtime import RunControls
+from ui.scan import ScanMixin
 from ui.actions import ActionsMixin
 from ui.constants import BASE
 from ui.dialogs import DialogMixin
@@ -18,12 +19,13 @@ from ui.layout import LayoutMixin
 from ui.plots import PlotMixin
 
 
-class App(LayoutMixin, FormMixin, ActionsMixin, EventsMixin, PlotMixin, DialogMixin, tk.Tk):
+class App(ScanMixin, LayoutMixin, FormMixin, ActionsMixin, EventsMixin, PlotMixin, DialogMixin, tk.Tk):
     def __init__(self):
         super().__init__()
         self.title('7722 + 2700 · 制冷机交流驱动与温度采集')
         self.geometry('1480x985')
         self.minsize(1320, 950)
+        self.scanning = False
         self.worker = None
         self.run_finished = True
         self.controls = RunControls()
@@ -50,6 +52,9 @@ class App(LayoutMixin, FormMixin, ActionsMixin, EventsMixin, PlotMixin, DialogMi
         self.after(100, self.poll)
 
     def close(self):
+        if self.scanning:
+            self.scan_status.set('正在识别设备，请等待扫描完成后关闭。')
+            return
         if self.off_failed and (not self.worker or not self.worker.is_alive()):
             messagebox.showerror('输出状态未确认', '请手动关闭电源并检查通信；输出状态未确认时不能直接退出。')
             return
