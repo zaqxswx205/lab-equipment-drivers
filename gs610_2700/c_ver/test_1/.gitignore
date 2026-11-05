@@ -1,0 +1,7 @@
+.toolchain/
+*.obj
+*.exe
+*.ilk
+*.pdb
+result/
+__pycache__/
