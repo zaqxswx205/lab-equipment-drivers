@@ -84,6 +84,8 @@ class SimTransport:
             return 'ITECH,SIM7722,LOCAL,1.0'
         if command == 'SYST:ERR?':
             return self.errors.pop(0) if self.errors else '0,"No error"'
+        if command == 'SOUR:NORM:MODE?':
+            return self.state['mode']
         if command == 'OUTP:STAT?':
             return '1' if self.state['output'] else '0'
         v = min(self.state['voltage'], self.state['ovp']) if self.state['output'] else 0.
