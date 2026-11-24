@@ -1,4 +1,0 @@
-﻿time,channel,wires,resistance_ohm,temperature_K,strategy,stage,drive_mode,drive_target,setting_voltage_V,output_on,voltage_V,current_A,power_W,power_factor
-2026-11-13 10:36:03,102,2,108.328201,294.5265325520378,,,,,,,,,,
-2026-11-13 10:36:05,101,2,108.602493,295.2328877376492,,,,,,,,,,
-2026-11-13 10:36:06,102,2,108.332291,294.5370640067788,,,,,,,,,,
