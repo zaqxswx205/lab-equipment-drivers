@@ -1,0 +1,5 @@
+﻿time,channel,wires,resistance_ohm,temperature_K,strategy,stage,drive_mode,drive_target,setting_voltage_V,output_on,voltage_V,current_A,power_W,power_factor
+2026-11-25 09:09:39,102,2,107.960785,293.5805974149757,,,,,,,,,,
+2026-11-25 09:09:40,101,2,108.508957,294.9919976917018,,,,,,,,,,
+2026-11-25 09:09:41,102,2,107.964218,293.5894346537823,,,,,,,,,,
+2026-11-25 09:09:43,101,2,108.506607,294.98594578850054,,,,,,,,,,
